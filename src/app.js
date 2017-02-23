@@ -9,87 +9,45 @@ import {
     a
 } from '@cycle/dom'
 import xs from 'xstream'
+import delay from 'xstream/extra/delay'
+
+
+import {buttonArr, defaultState} from './constants'
+import {reducer} from './reducer'
+import {createAction, makeUrl} from './helpers'
+import {logger, logObj} from './logger'
+
 
 export function App(sources) {
-
-    const buttonArr = [{
-        name: 'DR1',
-        slug: 'dr1'
-    }, {
-        name: 'DR2',
-        slug: 'dr2'
-    }, {
-        name: 'DR3',
-        slug: 'dr3'
-    }, {
-        name: 'DRK',
-        slug: 'dr-k'
-    }];
-
-    const defaultState = {
-      limit: 2,
-      offset: 0,
-      channel: 'dr1',
-      loading: false,
-      items: []
-    };
-
-    const createAction = (type,data) => {
-      return {type,data};
-    }
-
-    const makeUrl = (channel, offset, limit) => `http://www.dr.dk/mu-online/api/1.3/list/view/lastchance?limit=${limit}&offset=${offset}&channel=${channel}`
-
-    // REDUCERS
-
-    const reducer = (state=defaultState,action) => {
-        switch (action.type) {
-          case 'LOAD_MORE':
-              return Object.assign({},state,{
-                offset : state.offset + state.limit,
-                loading: true
-              };
-          case 'RESET_WITH_CHANNEL':
-              return Object.assign({},state,{
-                offset: 0;
-                channel :action.data.channel;
-                loading: true
-              });
-          default:
-              return state;
-        }
-    }
-
     // INTENT
     const button$ = sources.DOM.select('.drButton').events('click')
-        .map(ev => createAction('RESET_WITH_CHANNEL',ev.target.getAttribute('data-id')))
+        .map(ev => {
+            return createAction(
+              'RESET_WITH_CHANNEL',
+              ev.target.getAttribute('data-id')
+            )
+        })
+
 
     const loadMoreIntent$ = sources.DOM.select('.more').events('click')
         .map(ev=>{ev.preventDefault(); return createAction('LOAD_MORE')});
 
     const actions$ = xs.merge(button$,loadMoreIntent$)
 
+
     // MODEL
-    const state$ = actions$.fold((acc, seed) => {
-        if (seed=='loadmore' || acc.channel == seed) {
-            acc.offset = acc.offset + acc.limit
-        } else {
-            acc.offset = 0;
-            acc.channel = seed;
-        }
-        acc.loading = true;
-        return acc;
+    const state$ = actions$.fold((state, action) => {
+        return reducer(state, action);
     }, defaultState);
 
     state$.addListener({
         next: (val) => {
-            console.log('STATE-next', val);
+            logObj(val, 'state');
         }
     })
 
     const req$ = state$
         .map((state) => {
-            //console.log(val);
             return {
                 url: makeUrl(state.channel, state.offset, state.limit),
                 category: 'users',
@@ -106,18 +64,23 @@ export function App(sources) {
             return JSON.parse(rsp.text);
         }).map(textObj => textObj.Items)
 
-    const foldedItems$ = items$.fold((acc, seed) => acc.concat(seed), [])
+    const loadedItems$ = items$
+        .map(items => {return createAction('ITEMS_LOADED', items)});
 
-    const stateWithItems$ = xs.combine(items$, state$).fold((acc,latest)=>{
-    },{})
+    // const foldedItems$ = items$.fold((acc, seed) => acc.concat(seed), [])
 
-    stateWithItems$.addListener({
+    // const stateWithItems$ = xs.combine(items$, state$).fold((acc,latest)=>{
+    // },{})
+
+    const stateAndLoaded$ = xs.combine(state$,loadedItems$).map(val=>{
+      return reducer(val[0],val[1]);
+    });
+
+    stateAndLoaded$.addListener({
         next: (val) => {
-            console.log('STATE-ITEMS', val);
+            logObj(val,'loaded');
         }
     })
-
-
 
 
     // VIEW
@@ -138,7 +101,8 @@ export function App(sources) {
         }))
     )
 
-    let vdom$ = foldedItems$
+    const items2$ = xs.of([]);
+    let vdom$ = items2$
         .map(items => {
             const children = items.map((item) => {
                 // console.log(item);
